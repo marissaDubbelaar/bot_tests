@@ -1,22 +1,45 @@
-name: Send Telegram
+name: Send Telegram Cashback Digest
 on:
   schedule:
-    - cron: "0 7 * * 1"   # 07:00 UTC = 09:00 Europe/Berlin on Mondays
-  workflow_dispatch:       # let you test it manually
+    - cron: "0 7 * * 1"   # 07:00 UTC = 09:00 Europe/Berlin Mondays
+  workflow_dispatch:
+
 jobs:
   send:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Read message
+
+      # 1) Make sure message.md exists, or send a placeholder
+      - name: Read message (robust)
         id: msg
+        shell: bash
         run: |
-          # Trim to Telegram's 4096-char limit per message, we'll chunk in Python
-          echo "MESSAGE<<EOF" >> $GITHUB_OUTPUT
-          cat message.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          FILE="message.md"
+          DELIM="__MSG_$(date +%s)__"
+          if [ -f "$FILE" ]; then
+            {
+              echo "MESSAGE<<$DELIM"
+              cat "$FILE"
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "MESSAGE<<$DELIM"
+              echo "No message.md found in repo root. This is a test message."
+              echo "$DELIM"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # 2) Prepare Python
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install --upgrade pip requests
+
+      # 3) Send to Telegram
       - name: Send to Telegram
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
@@ -24,17 +47,16 @@ jobs:
           MESSAGE: ${{ steps.msg.outputs.MESSAGE }}
         run: |
           python - << 'PY'
-          import os, requests, textwrap
+          import os, requests
           token   = os.environ["TG_TOKEN"]
           chat_id = os.environ["TG_CHAT_ID"]
           msg     = os.environ["MESSAGE"].strip()
           url     = f"https://api.telegram.org/bot{token}/sendMessage"
 
-          # Telegram limit ~4096 chars; chunk politely at paragraph boundaries
-          parts = []
-          buf = ""
+          # chunk to ~3900 chars to stay under Telegram's limit
+          parts, buf = [], ""
           for line in msg.splitlines(True):
-            if len(buf)+len(line) > 3900:
+            if len(buf) + len(line) > 3900:
               parts.append(buf); buf = ""
             buf += line
           if buf: parts.append(buf)
