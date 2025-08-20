@@ -1,0 +1,37 @@
+name: Send Discord Cashback Digest
+on:
+  schedule:
+    - cron: "0 7 * * 1"    # 07:00 UTC = 09:00 Berlin Mondays
+  workflow_dispatch:
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read message
+        id: msg
+        run: |
+          echo "MESSAGE<<EOF" >> $GITHUB_OUTPUT
+          cat message.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - name: Send to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MESSAGE: ${{ steps.msg.outputs.MESSAGE }}
+        run: |
+          python - << 'PY'
+          import os, requests
+          webhook = os.environ["DISCORD_WEBHOOK_URL"]
+          msg = os.environ["MESSAGE"].strip()
+
+          # Discord hard limit 2000 chars; chunk messages
+          chunks, step = [], 1800
+          for i in range(0, len(msg), step):
+            chunks.append(msg[i:i+step])
+
+          for idx, chunk in enumerate(chunks, 1):
+            content = f"(Part {idx}/{len(chunks)})\n{chunk}" if len(chunks)>1 else chunk
+            r = requests.post(webhook, json={"content": content}, timeout=30)
+            r.raise_for_status()
+          print("Sent", len(chunks), "chunk(s)")
+          PY
