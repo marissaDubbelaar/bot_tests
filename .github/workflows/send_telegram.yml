@@ -1,0 +1,52 @@
+name: Send Telegram
+on:
+  schedule:
+    - cron: "0 7 * * 1"   # 07:00 UTC = 09:00 Europe/Berlin on Mondays
+  workflow_dispatch:       # let you test it manually
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read message
+        id: msg
+        run: |
+          # Trim to Telegram's 4096-char limit per message, we'll chunk in Python
+          echo "MESSAGE<<EOF" >> $GITHUB_OUTPUT
+          cat message.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Send to Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          MESSAGE: ${{ steps.msg.outputs.MESSAGE }}
+        run: |
+          python - << 'PY'
+          import os, requests, textwrap
+          token   = os.environ["TG_TOKEN"]
+          chat_id = os.environ["TG_CHAT_ID"]
+          msg     = os.environ["MESSAGE"].strip()
+          url     = f"https://api.telegram.org/bot{token}/sendMessage"
+
+          # Telegram limit ~4096 chars; chunk politely at paragraph boundaries
+          parts = []
+          buf = ""
+          for line in msg.splitlines(True):
+            if len(buf)+len(line) > 3900:
+              parts.append(buf); buf = ""
+            buf += line
+          if buf: parts.append(buf)
+
+          for i, p in enumerate(parts, 1):
+            if len(parts) > 1:
+              p = f"(Part {i}/{len(parts)})\n\n{p}"
+            r = requests.post(url, json={
+              "chat_id": chat_id,
+              "text": p,
+              "parse_mode": "Markdown"
+            }, timeout=30)
+            r.raise_for_status()
+          print("Sent", len(parts), "part(s)")
+          PY
